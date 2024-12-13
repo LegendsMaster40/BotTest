@@ -1,0 +1,106 @@
+#2. Song Details and Thumbnails
+@bot.command(name="play")
+async def play(ctx, *, query):
+    if not ctx.voice_client:
+        if ctx.author.voice:
+            channel = ctx.author.voice.channel
+            await channel.connect()
+        else:
+            await ctx.send("You're not in a voice channel! Please join one and try again.")
+            return
+
+    ydl_opts = {
+        'format': 'bestaudio',
+        'noplaylist': True,
+        'quiet': True
+    }
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(f"ytsearch:{query}", download=False)
+            url = info['entries'][0]['url']
+            title = info['entries'][0]['title']
+            thumbnail = info['entries'][0]['thumbnails'][0]['url']
+        except Exception as e:
+            await ctx.send(f"Error finding song: {e}")
+            return
+
+    queue = get_queue(ctx)
+    queue.append(url)
+    if len(queue) == 1:
+        await play_next(ctx)
+    
+    await ctx.send(embed=discord.Embed(
+        title="Added to Queue",
+        description=f"**{title}**",
+        color=discord.Color.blue()
+    ).set_thumbnail(url=thumbnail))
+
+
+
+
+
+
+
+##############
+##############
+##############
+
+#3. Now Playing
+current_song = {}
+
+@bot.command(name="nowplaying")
+async def now_playing(ctx):
+    if ctx.guild.id in current_song:
+        song = current_song[ctx.guild.id]
+        await ctx.send(f"Now playing: **{song['title']}**\n{song['url']}")
+    else:
+        await ctx.send("No song is currently playing.")
+
+async def play_next(ctx):
+    queue = get_queue(ctx)
+    if len(queue) == 0:
+        await ctx.voice_client.disconnect()
+        return
+
+    url = queue[0]
+    with youtube_dl.YoutubeDL({'quiet': True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        current_song[ctx.guild.id] = {"title": info['title'], "url": url}
+
+    ffmpeg_opts = {
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+        'options': '-vn'
+    }
+    source = await discord.FFmpegOpusAudio.from_probe(url, **ffmpeg_opts)
+    ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop).result())
+    queue.pop(0)
+
+
+
+
+
+
+
+
+
+
+loop_mode = {}
+
+@bot.command(name="loop")
+async def toggle_loop(ctx):
+    loop_mode[ctx.guild.id] = not loop_mode.get(ctx.guild.id, False)
+    await ctx.send(f"Loop mode {'enabled' if loop_mode[ctx.guild.id] else 'disabled'}.")
+
+async def play_next(ctx):
+    queue = get_queue(ctx)
+    if len(queue) == 0:
+        await ctx.voice_client.disconnect()
+        return
+
+    if loop_mode.get(ctx.guild.id, False):
+        queue.append(queue[0])  # Add the current song to the end of the queue
+
+    url = queue.pop(0)  # Remove the current song from the queue
+    ffmpeg_opts = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+    source = await discord.FFmpegOpusAudio.from_probe(url, **ffmpeg_opts)
+    ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop).result())
